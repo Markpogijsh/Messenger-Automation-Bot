@@ -1,60 +1,97 @@
 const axios = require('axios');
 
-module.exports.config = {
-  name: 'ai',
-  version: '1.0.0',
-  role: 0,
-  hasPrefix: false,
-  aliases: ['gpt', 'gimage'],
-  description: "Analyze question or Vision",
-  usage: "ai [question] or reply to an image",
-  credits: 'Vern',
-  cooldown: 3,
-};
+function convertToBold(text) {
+  const boldMap = {
+    'a': '𝗮','b': '𝗯','c': '𝗰','d': '𝗱','e': '𝗲','f': '𝗳','g': '𝗴','h': '𝗵','i': '𝗶','j': '𝗷',
+    'k': '𝗸','l': '𝗹','m': '𝗺','n': '𝗻','o': '𝗼','p': '𝗽','q': '𝗾','r': '𝗿','s': '𝘀','t': '𝘁',
+    'u': '𝘂','v': '𝘃','w': '𝘄','x': '𝘅','y': '𝘆','z': '𝘇',
+    'A': '𝗔','B': '𝗕','C': '𝗖','D': '𝗗','E': '𝗘','F': '𝗙','G': '𝗚','H': '𝗛','I': '𝗜','J': '𝗝',
+    'K': '𝗞','L': '𝗟','M': '𝗠','N': '𝗡','O': '𝗢','P': '𝗣','Q': '𝗤','R': '𝗥','S': '𝗦','T': '𝗧',
+    'U': '𝗨','V': '𝗩','W': '𝗪','X': '𝗫','Y': '𝗬','Z': '𝗭',
+  };
+  return text.split('').map(char => boldMap[char] || char).join('');
+}
 
-module.exports.run = async function({ api, event, args }) {
-  const promptText = args.join(" ").trim();
-  const userReply = event.messageReply?.body || '';
-  const finalPrompt = `${userReply} ${promptText}`.trim();
-  const senderID = event.senderID;
-  const threadID = event.threadID;
-  const messageID = event.messageID;
+const responseOpeners = ["𝗚𝗽𝘁-𝟰𝗼 𝗙𝗿𝗲𝗲"];
 
-  if (!finalPrompt && !event.messageReply?.attachments?.[0]?.url) {
-    return api.sendMessage("❌ Please provide a prompt or reply to an image.", threadID, messageID);
-  }
+module.exports = {
+  config: {
+    name: 'ai',
+    aliases: ['gpt', 'lorex'],
+    description: 'An AI command powered by Gemini Vision',
+    cooldown: 3,
+    usePrefix: false, // works without prefix
+    credits: 'LorexAi'
+  },
 
-  api.sendMessage('🤖 𝗔𝗜 𝗜𝗦 𝗣𝗥𝗢𝗖𝗘𝗦𝗦𝗜𝗡𝗚 𝗬𝗢𝗨𝗥 𝗥𝗘𝗤𝗨𝗘𝗦𝗧...', threadID, async (err, info) => {
-    if (err) return;
+  onMessage: async function({ api, event, args }) {
+    const input = args.join(' ');
+    const uid = event.senderID;
+    const threadID = event.threadID;
+    const messageID = event.messageID;
+
+    const isPhotoReply = event.type === "message_reply"
+      && Array.isArray(event.messageReply?.attachments)
+      && event.messageReply.attachments.some(att => att.type === "photo");
+
+    async function sendTemp(message) {
+      return new Promise(resolve => {
+        api.sendMessage(message, threadID, (err, info) => resolve(info));
+      });
+    }
+
+    if (isPhotoReply) {
+      const photoUrl = event.messageReply.attachments?.[0]?.url;
+      if (!photoUrl) return api.sendMessage("❌ Could not get image URL.", threadID, messageID);
+      if (!input) return api.sendMessage("📸 Please provide a prompt along with the image.", threadID, messageID);
+
+      const tempMsg = await sendTemp("🔍 Analyzing image...");
+
+      try {
+        const { data } = await axios.get('https://daikyu-api.up.railway.app/api/gemini-pro', {
+          params: { ask: input, uid: uid, imageURL: photoUrl }
+        });
+
+        if (data?.reply) {
+          const opener = responseOpeners[Math.floor(Math.random() * responseOpeners.length)];
+          return api.editMessage(`${opener}\n\n${data.reply}`, tempMsg.messageID, threadID);
+        }
+
+        return api.editMessage("⚠️ Unexpected response from Vision API.", tempMsg.messageID, threadID);
+      } catch (err) {
+        console.error(err);
+        return api.editMessage("❌ Error analyzing image.", tempMsg.messageID, threadID);
+      }
+    }
+
+    // === GPT-4o TEXT MODE ===
+    if (!input) return api.sendMessage(
+      "❌ Please provide a prompt or reply to an image.",
+      threadID,
+      messageID
+    );
+
+    const tempMsg = await sendTemp("🔄 Wait kalang buddy...");
 
     try {
-      let imageUrl = "";
-      if (event.messageReply?.attachments?.[0]?.type === 'photo') {
-        imageUrl = event.messageReply.attachments[0].url;
-      }
-
-      const { data } = await axios.get("https://apis-rho-nine.vercel.app/gemini", {
-        params: {
-          ask: finalPrompt,
-          imagurl: imageUrl
-        }
+      const { data } = await axios.get('https://daikyu-api.up.railway.app/api/o3-mini', {
+        params: { prompt: input, uid: uid }
       });
 
-      const responseText = data.description || "❌ No response received from AI.";
+      if (!data?.response) return api.editMessage("❌ No response received. Try again.", tempMsg.messageID, threadID);
 
-      // Optional: Get user's name
-      api.getUserInfo(senderID, (err, infoUser) => {
-        const userName = infoUser?.[senderID]?.name || "Unknown User";
-        const timePH = new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' });
-        const replyMessage = `🤖 𝗔𝗜 𝗔𝗦𝗦𝗜𝗦𝗧𝗔𝗡𝗧\n━━━━━━━━━━━━━━━━━━\n${responseText}\n━━━━━━━━━━━━━━━━━━\n🗣 𝗔𝘀𝗸𝗲𝗱 𝗕𝘆: ${userName}\n⏰ 𝗧𝗶𝗺𝗲: ${timePH}`;
+      const formatted = data.response
+        .replace(/\*\*(.*?)\*\*/g, (_, t) => convertToBold(t))
+        .replace(/##(.*?)##/g, (_, t) => convertToBold(t))
+        .replace(/###\s*/g, '')
+        .replace(/\n{3,}/g, '\n\n');
 
-        api.editMessage(replyMessage, info.messageID);
-      });
+      const opener = responseOpeners[Math.floor(Math.random() * responseOpeners.length)];
+      return api.editMessage(`${opener}\n\n${formatted}`, tempMsg.messageID, threadID);
 
-    } catch (error) {
-      console.error("AI Error:", error);
-      const errMsg = "❌ Error: " + (error.response?.data?.message || error.message || "Unknown error occurred.");
-      api.editMessage(errMsg, info.messageID);
+    } catch (err) {
+      console.error(err);
+      return api.editMessage("⚠️ Something went wrong. Try again later.", tempMsg.messageID, threadID);
     }
-  });
+  }
 };
